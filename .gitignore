@@ -1,0 +1,8 @@
+# Ignore files
+.env
+*.code-workspace
+
+# Ignore folders
+node_modules
+.venv
+__pycache__
