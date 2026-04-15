@@ -1,7 +1,5 @@
 """RotorHazard bootstrap for the RaceLink plugin package."""
 
-# ruff: noqa: I001
-
 from __future__ import annotations
 
 import logging
@@ -10,6 +8,7 @@ from typing import Any
 
 from controller import RaceLink_Host
 from eventmanager import Evt
+
 from racelink.app import create_runtime
 from racelink.core import NullSink
 from racelink.domain import RL_DeviceGroup
