@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-
-from eventmanager import Evt
+from dataclasses import dataclass
+from typing import Any
 
 from controller import RaceLink_Host
+from eventmanager import Evt
 from racelink.app import create_runtime
 from racelink.core import NullSink
 from racelink.domain import RL_DeviceGroup
@@ -17,15 +18,20 @@ from .ui import RotorHazardUIAdapter
 
 logger = logging.getLogger(__name__)
 
-rl_app = None
-rl_instance = None
+
+@dataclass(slots=True)
+class _BootstrapState:
+    """Keep the latest bootstrap runtime references."""
+
+    rl_app: Any = None
+    rl_instance: Any = None
 
 
-def initialize(rhapi):
+_STATE = _BootstrapState()
+
+
+def initialize(rhapi: Any) -> None:
     """Initialize the RaceLink host runtime inside RotorHazard."""
-
-    global rl_app, rl_instance
-
     state_repository = get_runtime_state_repository()
     controller = RaceLink_Host(
         rhapi,
@@ -50,7 +56,8 @@ def initialize(rhapi):
         event_source=rh_adapter.source,
         data_sink=NullSink(),
     )
-    rl_instance = rl_app.rl_instance
+    _STATE.rl_app = rl_app
+    _STATE.rl_instance = rl_app.rl_instance
 
     register_rl_blueprint(
         rhapi,

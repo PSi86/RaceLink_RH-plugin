@@ -3,181 +3,322 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, TypeAlias
 
 from EventActions import ActionEffect
-from RHUI import UIField, UIFieldType
+from RHUI import UIField, UIFieldSelectOption, UIFieldType
 
 from racelink.domain import RL_FLAG_HAS_BRI, RL_FLAG_POWER_ON, get_specials_config
 
 logger = logging.getLogger(__name__)
 
+ActionPayload: TypeAlias = dict[str, Any]
+RegisterArgs: TypeAlias = dict[str, Any]
+OptionMeta: TypeAlias = dict[str, Any]
+SelectOptions: TypeAlias = list[UIFieldSelectOption]
+UIFields: TypeAlias = list[UIField]
+
 
 class RotorHazardActionsMixin:
-    def registerActions(self, args=None):
-        logger.debug("Registering RaceLink Actions")
+    """Provide RotorHazard action registration and dispatch helpers."""
 
-        if args and "register_fn" in args:
-            self.controller.action_reg_fn = args["register_fn"]
-            logger.debug("Saved Actions Register Function in RaceLink Instance")
+    def registerActions(self, args: RegisterArgs | None = None) -> None:  # noqa: N802
+        """Register RaceLink actions with RotorHazard."""
+        logger.debug("Registering RaceLink actions")
 
-        if not args and self.controller.action_reg_fn:
-            effect_options = self._get_select_options("wled_control", "presetId")
-            default_effect = effect_options[0].value if effect_options else "01"
-            for effect in [
-                ActionEffect(
-                    "RaceLink Action",
-                    self.groupSwitch,
-                    [
-                        UIField(
-                            "rl_action_group",
-                            "Node Group",
-                            UIFieldType.SELECT,
-                            options=self.controller.uiGroupList,
-                            value=self.controller.uiGroupList[0].value,
+        register_fn = args.get("register_fn") if args else None
+        if register_fn is not None:
+            self.controller.action_reg_fn = register_fn
+            logger.debug("Saved action register function in RaceLink instance")
+            return
+
+        if not self.controller.action_reg_fn:
+            return
+
+        self._register_default_group_action()
+        self._register_special_actions()
+
+    def _register_default_group_action(self) -> None:
+        """Register the default group control action."""
+        effect_options = self._get_select_options("wled_control", "presetId")
+        default_effect = effect_options[0].value if effect_options else "01"
+        fields = [
+            UIField(
+                "rl_action_group",
+                "Node Group",
+                UIFieldType.SELECT,
+                options=self.controller.uiGroupList,
+                value=self.controller.uiGroupList[0].value,
+            ),
+            UIField(
+                "rl_action_effect",
+                "Color",
+                UIFieldType.SELECT,
+                options=effect_options,
+                value=default_effect,
+            ),
+            UIField(
+                "rl_action_brightness",
+                "Brightness",
+                UIFieldType.BASIC_INT,
+                value=70,
+            ),
+        ]
+        effect = ActionEffect(
+            "RaceLink Action",
+            self.groupSwitch,
+            fields,
+            name="gcaction",
+        )
+        self.controller.action_reg_fn(effect)
+
+    def _register_special_actions(self) -> None:
+        """Register capability-driven special actions."""
+        specials = get_specials_config(
+            context={"rhapi": self.rhapi, "gc": self.controller}
+        )
+        for cap_key, cap_info in specials.items():
+            self._register_special_actions_for_capability(cap_key, cap_info)
+
+    def _register_special_actions_for_capability(
+        self,
+        cap_key: str,
+        cap_info: OptionMeta,
+    ) -> None:
+        """Register special actions for one capability entry."""
+        functions = cap_info.get("functions", []) or []
+        if not functions:
+            return
+
+        cap_label = cap_info.get("label", cap_key)
+        options_by_key = {
+            option.get("key"): option
+            for option in cap_info.get("options", [])
+            if option.get("key") is not None
+        }
+
+        for fn_info in functions:
+            if fn_info.get("type", "control") != "control":
+                continue
+            self._register_special_action_variants(
+                cap_key=cap_key,
+                cap_label=cap_label,
+                fn_info=fn_info,
+                options_by_key=options_by_key,
+            )
+
+    def _register_special_action_variants(
+        self,
+        *,
+        cap_key: str,
+        cap_label: str,
+        fn_info: OptionMeta,
+        options_by_key: dict[str, OptionMeta],
+    ) -> None:
+        """Register device and/or group variants for one special action."""
+        fn_key = str(fn_info.get("key", ""))
+        if not fn_key:
+            return
+
+        action_meta = {
+            "cap_label": cap_label,
+            "fn_key": fn_key,
+            "fn_label": str(fn_info.get("label") or cap_label),
+            "vars_list": [str(var) for var in fn_info.get("vars", []) or []],
+        }
+
+        if bool(fn_info.get("unicast")):
+            self._register_special_effect(
+                action_meta=action_meta,
+                cap_key=cap_key,
+                options_by_key=options_by_key,
+                mode="device",
+            )
+
+        if bool(fn_info.get("broadcast")):
+            self._register_special_effect(
+                action_meta=action_meta,
+                cap_key=cap_key,
+                options_by_key=options_by_key,
+                mode="group",
+            )
+
+    def _register_special_effect(
+        self,
+        *,
+        action_meta: OptionMeta,
+        cap_key: str,
+        options_by_key: dict[str, OptionMeta],
+        mode: str,
+    ) -> None:
+        """Register a single special action effect."""
+        fields = self._build_special_fields(
+            cap_key=cap_key,
+            fn_key=str(action_meta["fn_key"]),
+            vars_list=list(action_meta["vars_list"]),
+            options_by_key=options_by_key,
+            mode=mode,
+        )
+        if not fields:
+            return
+
+        target_suffix = "Device" if mode == "device" else "Group"
+        cap_label = str(action_meta["cap_label"])
+        fn_label = str(action_meta["fn_label"])
+        label_prefix = cap_label if fn_label == cap_label else fn_label
+        effect = ActionEffect(
+            f"{label_prefix} by {target_suffix}",
+            self._make_special_action_handler(str(action_meta["fn_key"]), mode),
+            fields,
+            name=f"rl_special_{action_meta['fn_key']}_{mode}",
+        )
+        self.controller.action_reg_fn(effect)
+
+    def _build_special_fields(
+        self,
+        *,
+        cap_key: str,
+        fn_key: str,
+        vars_list: list[str],
+        options_by_key: dict[str, OptionMeta],
+        mode: str,
+    ) -> UIFields | None:
+        """Build UI fields for a special action definition."""
+        target_field = self._build_special_target_field(
+            cap_key=cap_key,
+            fn_key=fn_key,
+            mode=mode,
+        )
+        if target_field is None:
+            return None
+
+        fields = [target_field]
+        fields.extend(
+            self._build_special_variable_fields(
+                fn_key=fn_key,
+                vars_list=vars_list,
+                options_by_key=options_by_key,
+            )
+        )
+        return fields
+
+    def _build_special_target_field(
+        self,
+        *,
+        cap_key: str,
+        fn_key: str,
+        mode: str,
+    ) -> UIField | None:
+        """Build the device/group target selector field."""
+        if mode == "device":
+            options = self.rl_createUiDevList(
+                capabilities=[cap_key],
+                outputGroups=False,
+            )["devices"]
+            if not options:
+                return None
+            return UIField(
+                f"rl_special_{fn_key}_device",
+                "Device",
+                UIFieldType.SELECT,
+                options=options,
+                value=options[0].value,
+            )
+
+        options = self.rl_createUiDevList(
+            capabilities=[cap_key],
+            outputDevices=False,
+        )["groups"]
+        if not options:
+            return None
+        return UIField(
+            f"rl_special_{fn_key}_group",
+            "Group",
+            UIFieldType.SELECT,
+            options=options,
+            value=options[0].value,
+        )
+
+    def _build_special_variable_fields(
+        self,
+        *,
+        fn_key: str,
+        vars_list: list[str],
+        options_by_key: dict[str, OptionMeta],
+    ) -> UIFields:
+        """Build per-variable input fields for a special action."""
+        fields: UIFields = []
+        for variable in vars_list:
+            opt_meta = options_by_key.get(variable, {})
+            label = str(opt_meta.get("label", variable))
+            default_value = opt_meta.get("min", 0)
+            select_options = self._get_select_options(fn_key, variable)
+            if select_options:
+                fields.append(
+                    UIField(
+                        f"rl_special_{fn_key}_{variable}",
+                        label,
+                        UIFieldType.SELECT,
+                        options=select_options,
+                        value=self._resolve_default_select_value(
+                            select_options,
+                            default_value,
                         ),
-                        UIField("rl_action_effect", "Color", UIFieldType.SELECT, options=effect_options, value=default_effect),
-                        UIField("rl_action_brightness", "Brightness", UIFieldType.BASIC_INT, value=70),
-                    ],
-                    name="gcaction",
+                    )
                 )
-            ]:
-                self.controller.action_reg_fn(effect)
+                continue
 
-            specials = get_specials_config(context={"rhapi": self.rhapi, "gc": self.controller})
-            for cap_key, cap_info in specials.items():
-                funcs = cap_info.get("functions", []) or []
-                if not funcs:
-                    continue
-                cap_label = cap_info.get("label", cap_key)
-                options_by_key = {opt.get("key"): opt for opt in cap_info.get("options", [])}
-                for fn_info in funcs:
-                    fn_key = fn_info.get("key")
-                    fn_label = fn_info.get("label") or cap_label
-                    vars_list = fn_info.get("vars", []) or []
-                    allow_unicast = bool(fn_info.get("unicast"))
-                    allow_broadcast = bool(fn_info.get("broadcast"))
-                    fn_type = fn_info.get("type", "control")
+            fields.append(
+                UIField(
+                    f"rl_special_{fn_key}_{variable}",
+                    label,
+                    UIFieldType.BASIC_INT,
+                    value=default_value,
+                )
+            )
+        return fields
 
-                    if fn_type != "control":
-                        continue
+    def _resolve_default_select_value(
+        self,
+        select_options: SelectOptions,
+        default_value: Any,
+    ) -> Any:
+        """Resolve the preferred default value from a select option list."""
+        default_select = select_options[0].value
+        if default_value is None:
+            return default_select
 
-                    def _build_fields(mode):
-                        fields = []
-                        if mode == "device":
-                            options = self.rl_createUiDevList(capabilities=[cap_key], outputGroups=False)["devices"]
-                            if not options:
-                                return None
-                            fields.append(
-                                UIField(
-                                    f"rl_special_{fn_key}_device",
-                                    "Device",
-                                    UIFieldType.SELECT,
-                                    options=options,
-                                    value=options[0].value if options else "",
-                                )
-                            )
-                        else:
-                            options = self.rl_createUiDevList(capabilities=[cap_key], outputDevices=False)["groups"]
-                            if not options:
-                                return None
-                            fields.append(
-                                UIField(
-                                    f"rl_special_{fn_key}_group",
-                                    "Group",
-                                    UIFieldType.SELECT,
-                                    options=options,
-                                    value=options[0].value if options else "",
-                                )
-                            )
-                        for var in vars_list:
-                            opt_meta = options_by_key.get(var, {})
-                            label = opt_meta.get("label", var)
-                            default_val = opt_meta.get("min", 0)
-                            select_options = self._get_select_options(fn_key, var)
-                            if select_options:
-                                default_select = select_options[0].value
-                                if default_val is not None:
-                                    for opt in select_options:
-                                        try:
-                                            if int(opt.value) == int(default_val):
-                                                default_select = opt.value
-                                                break
-                                        except Exception:
-                                            if str(opt.value) == str(default_val):
-                                                default_select = opt.value
-                                                break
-                                fields.append(
-                                    UIField(
-                                        f"rl_special_{fn_key}_{var}",
-                                        label,
-                                        UIFieldType.SELECT,
-                                        options=select_options,
-                                        value=default_select,
-                                    )
-                                )
-                                continue
-                            fields.append(UIField(f"rl_special_{fn_key}_{var}", label, UIFieldType.BASIC_INT, value=default_val))
-                        return fields
+        for option in select_options:
+            try:
+                if int(option.value) == int(default_value):
+                    return option.value
+            except Exception:
+                if str(option.value) == str(default_value):
+                    return option.value
+        return default_select
 
-                    if allow_unicast:
-                        fields = _build_fields("device")
-                        if not fields:
-                            continue
-                        label = f"{cap_label} by Device" if fn_label == cap_label else f"{fn_label} by Device"
-                        self.controller.action_reg_fn(
-                            ActionEffect(label, self._make_special_action_handler(fn_key, "device"), fields, name=f"rl_special_{fn_key}_device")
-                        )
-                    if allow_broadcast:
-                        fields = _build_fields("group")
-                        if not fields:
-                            continue
-                        label = f"{cap_label} by Group" if fn_label == cap_label else f"{fn_label} by Group"
-                        self.controller.action_reg_fn(
-                            ActionEffect(label, self._make_special_action_handler(fn_key, "group"), fields, name=f"rl_special_{fn_key}_group")
-                        )
-
-    def _make_special_action_handler(self, fn_key: str, mode: str):
-        def _handler(action, args=None):
-            return self.specialAction(action, fn_key, mode)
+    def _make_special_action_handler(
+        self,
+        fn_key: str,
+        mode: str,
+    ) -> Any:
+        """Create a framework callback for one special action."""
+        def _handler(action: ActionPayload, _args: Any = None) -> None:
+            self.specialAction(action, fn_key, mode)
 
         return _handler
 
-    def specialAction(self, action, fn_key: str, mode: str):
-        specials = get_specials_config()
-        fn_info = None
-        cap_key = None
-        for cap, info in specials.items():
-            for fn in info.get("functions", []) or []:
-                if fn.get("key") == fn_key:
-                    fn_info = fn
-                    cap_key = cap
-                    break
-            if fn_info:
-                break
-        if not fn_info:
+    def specialAction(  # noqa: N802
+        self,
+        action: ActionPayload,
+        fn_key: str,
+        mode: str,
+    ) -> None:
+        """Dispatch a special action to the controller."""
+        fn_info, cap_key = self._find_special_function(fn_key)
+        if fn_info is None:
             logger.warning("specialAction: function not found: %s", fn_key)
             return
-
-        vars_list = fn_info.get("vars", []) or []
-        params = {}
-        for var in vars_list:
-            key = f"rl_special_{fn_key}_{var}"
-            try:
-                params[var] = int(action.get(key, 0))
-            except Exception:
-                params[var] = action.get(key, 0)
-
-        target_device = None
-        target_group = None
-        if mode == "device":
-            target_addr = action.get(f"rl_special_{fn_key}_device")
-            if target_addr:
-                target_device = self.controller.getDeviceFromAddress(target_addr)
-        else:
-            try:
-                target_group = int(action.get(f"rl_special_{fn_key}_group"))
-            except Exception:
-                target_group = None
 
         comm_name = fn_info.get("comm")
         if not comm_name:
@@ -189,48 +330,169 @@ class RotorHazardActionsMixin:
             logger.warning("specialAction: comm function missing: %s", comm_name)
             return
 
+        params = self._collect_special_params(action, fn_key, fn_info)
+        target_device, target_group = self._resolve_special_target(
+            action=action,
+            fn_key=fn_key,
+            mode=mode,
+        )
+
         logger.debug("RL: specialAction %s (%s)", fn_key, cap_key or "unknown")
         try:
-            comm_fn(targetDevice=target_device, targetGroup=target_group, params=params)
+            comm_fn(
+                targetDevice=target_device,
+                targetGroup=target_group,
+                params=params,
+            )
         except Exception:
             logger.exception("RL: specialAction failed: %s", fn_key)
 
-    def nodeSwitch(self, action, args=None):
+    def _find_special_function(
+        self,
+        fn_key: str,
+    ) -> tuple[OptionMeta | None, str | None]:
+        """Find a special function definition by key."""
+        specials = get_specials_config()
+        for cap_key, info in specials.items():
+            for fn_info in info.get("functions", []) or []:
+                if fn_info.get("key") == fn_key:
+                    return fn_info, cap_key
+        return None, None
+
+    def _collect_special_params(
+        self,
+        action: ActionPayload,
+        fn_key: str,
+        fn_info: OptionMeta,
+    ) -> dict[str, Any]:
+        """Collect typed parameter values for a special action."""
+        params: dict[str, Any] = {}
+        for variable in fn_info.get("vars", []) or []:
+            option_key = f"rl_special_{fn_key}_{variable}"
+            params[str(variable)] = self._coerce_action_value(
+                action.get(option_key, 0)
+            )
+        return params
+
+    def _resolve_special_target(
+        self,
+        *,
+        action: ActionPayload,
+        fn_key: str,
+        mode: str,
+    ) -> tuple[Any, int | None]:
+        """Resolve the target device/group for a special action."""
+        if mode == "device":
+            target_addr = action.get(f"rl_special_{fn_key}_device")
+            target_device = None
+            if target_addr:
+                target_device = self.controller.getDeviceFromAddress(target_addr)
+            return target_device, None
+
+        try:
+            target_group = int(action.get(f"rl_special_{fn_key}_group"))
+        except Exception:
+            target_group = None
+        return None, target_group
+
+    def _coerce_action_value(self, value: Any) -> Any:
+        """Coerce string-like values to integers when possible."""
+        try:
+            return int(value)
+        except Exception:
+            return value
+
+    def nodeSwitch(  # noqa: N802
+        self,
+        action: ActionPayload,
+        _args: Any = None,
+    ) -> None:
+        """Apply a direct device action or quickset action."""
         if "rl_action_device" in action:
-            logger.debug("Action triggered")
-            targetDevice = self.controller.getDeviceFromAddress(action["rl_action_device"])
-            if targetDevice is None:
-                logger.warning("nodeSwitch: device not found: %r", action["rl_action_device"])
-                return
-            targetDevice.brightness = int(action["rl_action_brightness"])
-            targetDevice.presetId = int(action["rl_action_effect"])
-            targetDevice.flags = (RL_FLAG_POWER_ON if int(action["rl_action_brightness"]) > 0 else 0) | RL_FLAG_HAS_BRI
-            self.controller.sendRaceLink(targetDevice)
+            self._apply_device_action(
+                device_addr=str(action["rl_action_device"]),
+                brightness=int(action["rl_action_brightness"]),
+                preset_id=int(action["rl_action_effect"]),
+            )
 
         if "manual" in action:
-            logger.debug("Manual triggered")
-            targetDevice = self.controller.getDeviceFromAddress(self.rhapi.db.option("rl_quickset_device", None))
-            if targetDevice is None:
-                logger.warning("nodeSwitch(manual): device not found in DB option")
-                return
-            targetDevice.brightness = int(self.rhapi.db.option("rl_quickset_brightness", None))
-            targetDevice.presetId = int(self.rhapi.db.option("rl_quickset_effect", None))
-            targetDevice.flags = (RL_FLAG_POWER_ON if int(self.rhapi.db.option("rl_quickset_brightness", None)) > 0 else 0) | RL_FLAG_HAS_BRI
-            self.controller.sendRaceLink(targetDevice)
+            self._apply_manual_device_action()
 
-    def groupSwitch(self, action, args=None):
+    def _apply_device_action(
+        self,
+        *,
+        device_addr: str,
+        brightness: int,
+        preset_id: int,
+    ) -> None:
+        """Apply control values to a specific device."""
+        logger.debug("Action triggered")
+        target_device = self.controller.getDeviceFromAddress(device_addr)
+        if target_device is None:
+            logger.warning("nodeSwitch: device not found: %r", device_addr)
+            return
+
+        target_device.brightness = brightness
+        target_device.presetId = preset_id
+        target_device.flags = self._build_power_flags(brightness)
+        self.controller.sendRaceLink(target_device)
+
+    def _apply_manual_device_action(self) -> None:
+        """Apply the saved quickset values to a specific device."""
+        logger.debug("Manual triggered")
+        target_device = self.controller.getDeviceFromAddress(
+            self.rhapi.db.option("rl_quickset_device", None)
+        )
+        if target_device is None:
+            logger.warning("nodeSwitch(manual): device not found in DB option")
+            return
+
+        brightness = int(self.rhapi.db.option("rl_quickset_brightness", None))
+        preset_id = int(self.rhapi.db.option("rl_quickset_effect", None))
+        target_device.brightness = brightness
+        target_device.presetId = preset_id
+        target_device.flags = self._build_power_flags(brightness)
+        self.controller.sendRaceLink(target_device)
+
+    def groupSwitch(  # noqa: N802
+        self,
+        action: ActionPayload,
+        _args: Any = None,
+    ) -> None:
+        """Apply a group action or quickset action."""
         if "rl_action_group" in action:
             logger.debug("Action triggered")
-            targetGroup = int(action["rl_action_group"])
-            targetBrightness = int(action["rl_action_brightness"])
-            targetEffect = int(action["rl_action_effect"])
-            targetFlags = (RL_FLAG_POWER_ON if int(action["rl_action_brightness"]) > 0 else 0) | RL_FLAG_HAS_BRI
-            self.controller.sendGroupControl(targetGroup, targetFlags, targetEffect, targetBrightness)
+            self._send_group_action(
+                group_id=int(action["rl_action_group"]),
+                brightness=int(action["rl_action_brightness"]),
+                preset_id=int(action["rl_action_effect"]),
+            )
 
         if "manual" in action:
             logger.debug("Manual triggered")
-            targetGroup = int(self.rhapi.db.option("rl_quickset_group", None))
-            targetBrightness = int(self.rhapi.db.option("rl_quickset_brightness", None))
-            targetEffect = int(self.rhapi.db.option("rl_quickset_effect", None))
-            targetFlags = (RL_FLAG_POWER_ON if int(self.rhapi.db.option("rl_quickset_brightness", None)) > 0 else 0) | RL_FLAG_HAS_BRI
-            self.controller.sendGroupControl(targetGroup, targetFlags, int(targetEffect), targetBrightness)
+            self._send_group_action(
+                group_id=int(self.rhapi.db.option("rl_quickset_group", None)),
+                brightness=int(
+                    self.rhapi.db.option("rl_quickset_brightness", None)
+                ),
+                preset_id=int(self.rhapi.db.option("rl_quickset_effect", None)),
+            )
+
+    def _send_group_action(
+        self,
+        *,
+        group_id: int,
+        brightness: int,
+        preset_id: int,
+    ) -> None:
+        """Send a group control action to the controller."""
+        self.controller.sendGroupControl(
+            group_id,
+            self._build_power_flags(brightness),
+            preset_id,
+            brightness,
+        )
+
+    def _build_power_flags(self, brightness: int) -> int:
+        """Build the standard RaceLink control flags for a brightness value."""
+        return (RL_FLAG_POWER_ON if brightness > 0 else 0) | RL_FLAG_HAS_BRI
