@@ -303,6 +303,7 @@ class RotorHazardActionsMixin:
         mode: str,
     ) -> Any:
         """Create a framework callback for one special action."""
+
         def _handler(action: ActionPayload, _args: Any = None) -> None:
             self.specialAction(action, fn_key, mode)
 
@@ -369,9 +370,7 @@ class RotorHazardActionsMixin:
         params: dict[str, Any] = {}
         for variable in fn_info.get("vars", []) or []:
             option_key = f"rl_special_{fn_key}_{variable}"
-            params[str(variable)] = self._coerce_action_value(
-                action.get(option_key, 0)
-            )
+            params[str(variable)] = self._coerce_action_value(action.get(option_key, 0))
         return params
 
     def _resolve_special_target(
@@ -472,9 +471,7 @@ class RotorHazardActionsMixin:
             logger.debug("Manual triggered")
             self._send_group_action(
                 group_id=int(self.rhapi.db.option("rl_quickset_group", None)),
-                brightness=int(
-                    self.rhapi.db.option("rl_quickset_brightness", None)
-                ),
+                brightness=int(self.rhapi.db.option("rl_quickset_brightness", None)),
                 preset_id=int(self.rhapi.db.option("rl_quickset_effect", None)),
             )
 

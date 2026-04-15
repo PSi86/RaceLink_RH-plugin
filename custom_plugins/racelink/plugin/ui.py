@@ -135,8 +135,7 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
         """Build an unfiltered device selection list."""
         logger.debug("RL: Creating UI device select options")
         return [
-            UIFieldSelectOption(device.addr, device.name)
-            for device in self._devices()
+            UIFieldSelectOption(device.addr, device.name) for device in self._devices()
         ]
 
     def rl_createUiDevList(  # noqa: N802
@@ -149,9 +148,7 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
         """Build filtered device and group option lists for the UI."""
         logger.debug("RL: Creating filtered UI device/group list")
         dev_types_set = (
-            {int(device_type) for device_type in dev_types}
-            if dev_types
-            else None
+            {int(device_type) for device_type in dev_types} if dev_types else None
         )
         capability_set = set(capabilities) if capabilities else None
         selected_devices = [
@@ -201,8 +198,7 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
     ) -> list[UIFieldSelectOption]:
         """Build device select options from filtered devices."""
         return [
-            UIFieldSelectOption(device.addr, device.name)
-            for device in selected_devices
+            UIFieldSelectOption(device.addr, device.name) for device in selected_devices
         ]
 
     def _build_group_options(
@@ -213,8 +209,7 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
     ) -> list[UIFieldSelectOption]:
         """Build group select options from filtered devices."""
         group_ids = {
-            int(getattr(device, "groupId", 0) or 0)
-            for device in selected_devices
+            int(getattr(device, "groupId", 0) or 0) for device in selected_devices
         }
         group_options: list[UIFieldSelectOption] = []
         for index, group in enumerate(self._groups()):
@@ -299,8 +294,7 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
             ]
         else:
             self.controller.uiEffectList = [
-                UIFieldSelectOption(str(preset_id), name)
-                for preset_id, name in parsed
+                UIFieldSelectOption(str(preset_id), name) for preset_id, name in parsed
             ]
         try:
             self.register_quickset_ui()

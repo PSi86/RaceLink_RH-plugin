@@ -70,9 +70,7 @@ class RotorHazardDataIOMixin:
             "rl_devices": [obj.__dict__ for obj in self._devices()],
             "rl_groups": [obj.__dict__ for obj in self._groups()],
             "help/rl_devices": ["Device List of known devices"],
-            "help/rl_devices/addr": [
-                "MAC of the device without ':' as separator"
-            ],
+            "help/rl_devices/addr": ["MAC of the device without ':' as separator"],
             "help/rl_devices/dev_type": [
                 "GATEWAY_REV1:1, NODE_WLED_REV1:10, NODE_WLED_REV3:11, "
                 "NODE_WLED_REV4:12, NODE_WLED_REV5:13, "
@@ -88,8 +86,7 @@ class RotorHazardDataIOMixin:
                 "HAS_BRI(0x04), FORCE_TT0(0x08), FORCE_REAPPLY(0x10)"
             ],
             "help/rl_devices/presetId": [
-                "1-255: WLED preset index / mapping used by the RaceLink "
-                "WLED Usermod"
+                "1-255: WLED preset index / mapping used by the RaceLink WLED Usermod"
             ],
             "help/rl_devices/brightness": [
                 "0: off, 1-255:dimming, special function with value 1: IR "
