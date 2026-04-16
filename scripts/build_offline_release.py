@@ -12,7 +12,8 @@ import types
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-PLUGIN_RELATIVE_PATH = Path("custom_plugins") / "racelink"
+PLUGIN_NAME = "racelink"
+PLUGIN_RELATIVE_PATH = Path("custom_plugins") / PLUGIN_NAME
 VENDOR_RELATIVE_PATH = Path("vendor") / "site-packages"
 HOST_REQUIRED_ENTRIES = ("controller.py", "racelink")
 PLUGIN_IGNORED_DIRS = {".git", ".github", ".ruff_cache", ".venv", "__pycache__"}
@@ -116,8 +117,9 @@ def _bundle_name(manifest: dict[str, object], release_tag: str) -> str:
 
 
 def _write_zip(stage_root: Path, zip_path: Path) -> None:
+    plugin_root = stage_root / PLUGIN_NAME
     with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as archive:
-        for file_path in sorted(stage_root.rglob("*")):
+        for file_path in sorted(plugin_root.rglob("*")):
             if file_path.is_dir():
                 continue
             if "__pycache__" in file_path.parts:
@@ -128,7 +130,7 @@ def _write_zip(stage_root: Path, zip_path: Path) -> None:
 
 
 def _validate_stage(stage_root: Path) -> None:
-    stage_plugin_dir = stage_root / PLUGIN_RELATIVE_PATH
+    stage_plugin_dir = stage_root / PLUGIN_NAME
     manifest = json.loads((stage_plugin_dir / "manifest.json").read_text("utf-8"))
     dependencies = manifest.get("dependencies", [])
     if dependencies:
@@ -149,7 +151,7 @@ def _validate_stage(stage_root: Path) -> None:
         importlib.import_module("racelink.web.blueprint")
 
         plugins_parent = types.ModuleType("plugins")
-        plugins_parent.__path__ = [str(stage_root / "custom_plugins")]
+        plugins_parent.__path__ = [str(stage_root)]
         sys.modules["plugins"] = plugins_parent
 
         plugin_init = stage_plugin_dir / "__init__.py"
@@ -293,7 +295,7 @@ def build_offline_release(
         shutil.rmtree(stage_root)
     stage_root.mkdir(parents=True, exist_ok=True)
 
-    stage_plugin_dir = stage_root / PLUGIN_RELATIVE_PATH
+    stage_plugin_dir = stage_root / PLUGIN_NAME
     _copy_plugin_tree(_plugin_source_dir(), stage_plugin_dir)
     manifest = _patch_manifest(stage_plugin_dir)
     _copy_host_source(host_source_dir, stage_plugin_dir)
