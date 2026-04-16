@@ -64,6 +64,15 @@ To run checks only for staged files:
 uv run pre-commit run
 ```
 
+## Offline Installation
+
+Use the GitHub release asset for offline RotorHazard plugin install, not the repository ZIP download.
+
+- The normal repository contents and `manifest.json` are designed for online installs. They pull `RaceLink_Host` from GitHub during dependency installation.
+- The offline release workflow builds a separate ZIP named like `racelink-rh-plugin-offline-vX.Y.Z.zip`.
+- That release ZIP bundles the required `RaceLink_Host` Python package inside the plugin payload, so RotorHazard does not need internet access to install dependencies.
+- The plain GitHub source ZIP remains intended for development or online installation only.
+
 ## License
 
 Distributed under the **MIT** License. See [`LICENSE`](LICENSE) for more information.

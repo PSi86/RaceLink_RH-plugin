@@ -1,0 +1,62 @@
+---
+name: Offline Release Bundle
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+env:
+  DEFAULT_PYTHON: "3.13"
+  RACELINK_HOST_REF: "refactoring_ng_3"
+
+jobs:
+  build-offline-bundle:
+    name: Build Offline Bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out plugin repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Check out RaceLink_Host
+        uses: actions/checkout@v6.0.2
+        with:
+          repository: PSi86/RaceLink_Host
+          ref: ${{ env.RACELINK_HOST_REF }}
+          path: external/RaceLink_Host
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.DEFAULT_PYTHON }}
+
+      - name: Install host runtime dependencies for smoke validation
+        run: python -m pip install ./external/RaceLink_Host
+
+      - name: Build offline bundle
+        id: build_bundle
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          python scripts/build_offline_release.py \
+            --host-source external/RaceLink_Host \
+            --output-dir dist \
+            --release-tag "${RELEASE_TAG}" | tee /tmp/offline_bundle_path.txt
+          echo "zip_path=$(tail -n 1 /tmp/offline_bundle_path.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: racelink-rh-plugin-offline
+          path: ${{ steps.build_bundle.outputs.zip_path }}
+
+      - name: Attach ZIP to GitHub release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.build_bundle.outputs.zip_path }}
