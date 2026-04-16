@@ -33,8 +33,7 @@ def _validate_version(version: str) -> str:
     normalized = str(version).strip()
     if not VERSION_PATTERN.fullmatch(normalized):
         message = (
-            "Version must look like semantic versioning, for example 0.1.3 or "
-            "0.1.3-rc1"
+            "Version must look like semantic versioning, for example 0.1.3 or 0.1.3-rc1"
         )
         raise ValueError(message)
     return normalized
