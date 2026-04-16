@@ -1,27 +1,36 @@
 <!-- PLUGIN BADGES -->
 [![RHFest][rhfest-shield]][rhfest-url]
 
-# RotorHazard Plugin Template
+# RaceLink RotorHazard Plugin
 
-This is a basic template repository for creating a plugin for the RotorHazard timing platform. It is intended to be used as a starting point for creating a new plugin.
+This repository contains the RotorHazard adapter plugin for RaceLink.
 
-> [!WARNING]
-> If you apply this plugin template to an existing RotorHazard plugin that uses GitHub releases, please note that the [community plugins](https://github.com/RotorHazard/community-plugins) database is only compatible with published releases that also pass the [RHFest](https://github.com/RotorHazard/rhfest-action) checks.
+The RaceLink web UI and the RaceLink core are provided by `RaceLink_Host`. This repository only contains the RotorHazard-specific integration layer and imports the host runtime from the installed `RaceLink_Host` package.
 
-## Features
+## Scope
 
-- **Pre-commit checks**: to run checks and tests on each commit.
-- **Python virtual environment**: uses [uv] to manage the python virtual environment and dependencies.
-- **RHFest validation**: GitHub action to validate the plugin manifest file against the RHFest schema.
-- **Renovate**: uses [Renovate](https://docs.renovatebot.com/) to keep dependencies up to date.
+- RotorHazard adapter package under `custom_plugins/racelink`
+- RotorHazard-specific plugin bootstrap and RH bridges under `custom_plugins/racelink/plugin`
+- Plugin manifest for RotorHazard and RHFest validation
+- Development tooling based on [uv] and [pre-commit]
+- `uv` dependency on `RaceLink_Host` from `PSi86/RaceLink_Host@refactoring_ng_3`
+
+## Architecture
+
+- This repository contains only the RotorHazard adapter layer.
+- The RaceLink web UI comes from `RaceLink_Host`.
+- The RaceLink core services come from `RaceLink_Host`.
+- The Host runtime and Flask blueprint registration are imported from `RaceLink_Host`.
+- No pages or static assets are copied into this repository.
+- No separate remote-client layer is introduced here.
 
 ## Development
 
-How to setup the development environment.
+How to set up the development environment.
 
 ### Prerequisites
 
-You need the following tools to get started:
+You need the following tools:
 
 - [uv] - A python virtual environment/package manager
 - [Python] 3.13 - The programming language
@@ -29,7 +38,7 @@ You need the following tools to get started:
 ### Installation
 
 1. Clone the repository
-2. Install all dependencies with UV. This will create a virtual environment and install all dependencies
+2. Install the project dependencies with `uv`. This creates a virtual environment and installs `RaceLink_Host` directly from the `refactoring_ng_3` branch.
 
 ```bash
 uv sync
@@ -43,15 +52,13 @@ uv run pre-commit install
 
 ### Run pre-commit checks
 
-As this repository uses the [pre-commit][pre-commit] framework, all changes
-are linted and tested with each commit. You can run all checks and tests
-manually, using the following command:
+This repository uses the [pre-commit][pre-commit] framework. You can run all configured checks manually with:
 
 ```bash
 uv run pre-commit run --all-files
 ```
 
-To manual run only on the staged files, use the following command:
+To run checks only for staged files:
 
 ```bash
 uv run pre-commit run
@@ -66,5 +73,5 @@ Distributed under the **MIT** License. See [`LICENSE`](LICENSE) for more informa
 [Python]: https://www.python.org/
 [pre-commit]: https://pre-commit.com/
 
-[rhfest-shield]: https://github.com/RotorHazard/plugin-template/actions/workflows/rhfest.yaml/badge.svg
-[rhfest-url]: https://github.com/RotorHazard/plugin-template/actions/workflows/rhfest.yaml
+[rhfest-shield]: https://github.com/PSi86/RaceLink_RH-plugin/actions/workflows/rhfest.yaml/badge.svg
+[rhfest-url]: https://github.com/PSi86/RaceLink_RH-plugin/actions/workflows/rhfest.yaml

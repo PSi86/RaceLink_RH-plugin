@@ -1,10 +1,10 @@
 [project]
-name = "rh-plugin-template"
+name = "racelink-rh-plugin"
 version = "0.1.0"
-description = "Add your description here"
+description = "RotorHazard adapter plugin for RaceLink."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = ["racelink-host @ git+https://github.com/PSi86/RaceLink_Host.git@refactoring_ng_3"]
 
 [dependency-groups]
 dev = [
