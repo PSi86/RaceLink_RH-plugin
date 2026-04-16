@@ -73,6 +73,15 @@ Use the GitHub release asset for offline RotorHazard plugin install, not the rep
 - That release ZIP bundles the required `RaceLink_Host` Python package inside the plugin payload, so RotorHazard does not need internet access to install dependencies.
 - The plain GitHub source ZIP remains intended for development or online installation only.
 
+## Release Workflow
+
+Use the GitHub Actions workflow `Release Offline Bundle` for official releases.
+
+- Trigger it manually from the `Actions` tab.
+- Provide the plugin version, for example `0.1.3`.
+- The workflow updates `custom_plugins/racelink/manifest.json`, commits the version bump, creates and pushes the tag, builds the offline ZIP, creates the GitHub release, and attaches the offline asset automatically.
+- Do not create the GitHub release manually first; the workflow owns the release creation step.
+
 ## License
 
 Distributed under the **MIT** License. See [`LICENSE`](LICENSE) for more information.
