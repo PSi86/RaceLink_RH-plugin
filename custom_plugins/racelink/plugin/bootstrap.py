@@ -83,9 +83,7 @@ def initialize(rhapi: Any) -> None:
     state_repository_factory = _load_runtime_module(
         "racelink.state"
     ).get_runtime_state_repository
-    register_rl_blueprint = _load_runtime_module(
-        "racelink.web"
-    ).register_rl_blueprint
+    register_rl_blueprint = _load_runtime_module("racelink.web").register_rl_blueprint
 
     state_repository = state_repository_factory()
     controller = RaceLink_Host(

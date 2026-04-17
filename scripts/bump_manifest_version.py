@@ -30,8 +30,7 @@ def _parse_args() -> argparse.Namespace:
         "--version",
         default="",
         help=(
-            "Explicit plugin version. If omitted, increment the current patch "
-            "version."
+            "Explicit plugin version. If omitted, increment the current patch version."
         ),
     )
     return parser.parse_args()
