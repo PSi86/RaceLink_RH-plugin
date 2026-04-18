@@ -7,8 +7,10 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPS_PATH = REPO_ROOT / "build" / "deps.json"
@@ -60,9 +62,13 @@ def _normalize_version(raw_version: str) -> str:
     return match.group("version")
 
 
-def _fetch_latest_version(repository: str) -> str:
-    request = urllib.request.Request(
-        url=f"https://api.github.com/repos/{repository}/releases/latest",
+def _github_request(url: str) -> urllib.request.Request:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc != "api.github.com":
+        message = f"Unsupported GitHub API URL: {url}"
+        raise ValueError(message)
+    request = urllib.request.Request(  # noqa: S310
+        url=url,
         headers={
             "Accept": "application/vnd.github+json",
             "User-Agent": "RaceLink_RH-plugin-release-resolver",
@@ -71,10 +77,88 @@ def _fetch_latest_version(repository: str) -> str:
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if token:
         request.add_header("Authorization", f"Bearer {token}")
+    return request
 
+
+def _read_json(url: str) -> object:
+    request = _github_request(url)
     with urllib.request.urlopen(request) as response:  # noqa: S310
-        payload = json.loads(response.read().decode("utf-8"))
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _expected_wheel_name(version: str) -> str:
+    return f"racelink_host-{version}-py3-none-any.whl"
+
+
+def _release_has_expected_wheel(release: dict[str, object]) -> bool:
+    tag_name = str(release.get("tag_name", "")).strip()
+    if not tag_name:
+        return False
+
+    version = _normalize_version(tag_name)
+    expected_wheel = _expected_wheel_name(version)
+    assets = release.get("assets", [])
+    if not isinstance(assets, list):
+        return False
+
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        if str(asset.get("name", "")).strip() == expected_wheel:
+            return True
+    return False
+
+
+def _fetch_latest_stable_version(repository: str) -> str:
+    payload = _read_json(f"https://api.github.com/repos/{repository}/releases/latest")
+    if not isinstance(payload, dict):
+        message = "GitHub latest-release API returned an unexpected payload."
+        raise TypeError(message)
     return _normalize_version(payload["tag_name"])
+
+
+def _fetch_latest_release_list_version(repository: str) -> str:
+    payload = _read_json(f"https://api.github.com/repos/{repository}/releases")
+    if not isinstance(payload, list):
+        message = "GitHub releases API returned an unexpected payload."
+        raise TypeError(message)
+
+    stable_candidate: str | None = None
+    prerelease_candidate: str | None = None
+    for release in payload:
+        if not isinstance(release, dict):
+            continue
+        if bool(release.get("draft")):
+            continue
+        if not _release_has_expected_wheel(release):
+            continue
+
+        version = _normalize_version(str(release["tag_name"]))
+        if bool(release.get("prerelease")):
+            prerelease_candidate = prerelease_candidate or version
+            continue
+        stable_candidate = stable_candidate or version
+
+    if stable_candidate:
+        return stable_candidate
+    if prerelease_candidate:
+        return prerelease_candidate
+
+    message = (
+        "No downloadable RaceLink_Host release wheel was found. "
+        "Expected a GitHub release asset named like "
+        "`racelink_host-X.Y.Z-py3-none-any.whl`."
+    )
+    raise RuntimeError(message)
+
+
+def _fetch_latest_version(repository: str) -> str:
+    try:
+        return _fetch_latest_stable_version(repository)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    return _fetch_latest_release_list_version(repository)
 
 
 def _resolve_version(config: dict[str, str], explicit_version: str) -> str:
