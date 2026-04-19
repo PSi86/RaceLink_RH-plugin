@@ -126,4 +126,3 @@ Distributed under the **MIT** License. See [`LICENSE`](LICENSE) for more informa
 
 [rhfest-shield]: https://github.com/PSi86/RaceLink_RH-plugin/actions/workflows/rhfest.yaml/badge.svg
 [rhfest-url]: https://github.com/PSi86/RaceLink_RH-plugin/actions/workflows/rhfest.yaml
-
