@@ -1,19 +1,24 @@
+"""Bootstrap integration tests for the RaceLink RotorHazard plugin."""
+
 from __future__ import annotations
 
 import importlib
 import sys
 import types
 import unittest
-from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 
 class BootstrapTests(unittest.TestCase):
+    """Verify bootstrap wiring against the expected host/plugin contract."""
+
     def setUp(self) -> None:
+        """Prepare isolated module stubs for bootstrap imports."""
         self._saved_modules = dict(sys.modules)
 
         eventmanager_mod = types.ModuleType("eventmanager")
-        eventmanager_mod.Evt = SimpleNamespace(
+        eventmanager_mod.Evt = types.SimpleNamespace(
             DATA_IMPORT_INITIALIZE="data_import_initialize",
             DATA_EXPORT_INITIALIZE="data_export_initialize",
             ACTIONS_INITIALIZE="actions_initialize",
@@ -27,7 +32,13 @@ class BootstrapTests(unittest.TestCase):
         controller_mod = types.ModuleType("controller")
 
         class FakeRaceLinkHost:
-            def __init__(self, rhapi, name, label, state_repository=None):
+            def __init__(
+                self,
+                rhapi: Any,
+                name: str,
+                label: str,
+                state_repository: Any = None,
+            ) -> None:
                 self._rhapi = rhapi
                 self.name = name
                 self.label = label
@@ -38,7 +49,7 @@ class BootstrapTests(unittest.TestCase):
                 self.onRaceFinish = Mock(name="onRaceFinish")
                 self.onRaceStop = Mock(name="onRaceStop")
 
-            def onStartup(self, args):
+            def onStartup(self, args: Any) -> Any:  # noqa: N802
                 return args
 
         controller_mod.RaceLink_Host = FakeRaceLinkHost
@@ -46,8 +57,8 @@ class BootstrapTests(unittest.TestCase):
 
         racelink_app_mod = types.ModuleType("racelink.app")
         self.create_runtime = Mock(
-            return_value=SimpleNamespace(
-                rl_instance=SimpleNamespace(
+            return_value=types.SimpleNamespace(
+                rl_instance=types.SimpleNamespace(
                     onStartup=Mock(name="onStartup"),
                     onRaceStart=Mock(name="onRaceStart"),
                     onRaceFinish=Mock(name="onRaceFinish"),
@@ -73,7 +84,7 @@ class BootstrapTests(unittest.TestCase):
 
         racelink_state_mod = types.ModuleType("racelink.state")
         racelink_state_mod.get_runtime_state_repository = Mock(
-            return_value=SimpleNamespace()
+            return_value=types.SimpleNamespace()
         )
         sys.modules["racelink.state"] = racelink_state_mod
 
@@ -87,7 +98,7 @@ class BootstrapTests(unittest.TestCase):
         )
 
         class FakeRotorHazardUIAdapter:
-            def __init__(self, controller, rhapi):
+            def __init__(self, controller: Any, rhapi: Any) -> None:
                 self.controller = controller
                 self.rhapi = rhapi
                 self.source = object()
@@ -106,18 +117,23 @@ class BootstrapTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
+        """Restore the original module state after each test."""
         sys.modules.clear()
         sys.modules.update(self._saved_modules)
 
     def test_initialize_registers_event_source_on_rhapi(self) -> None:
-        events = SimpleNamespace(on=Mock(name="events.on"))
-        rhapi = SimpleNamespace(events=events)
+        """Expose the adapter source through the host API event-source slot."""
+        events = types.SimpleNamespace(on=Mock(name="events.on"))
+        rhapi = types.SimpleNamespace(events=events)
 
         self.bootstrap.initialize(rhapi)
 
-        self.assertIsNotNone(rhapi.event_source)
+        self.assertIsNotNone(rhapi.event_source)  # noqa: PT009
         create_runtime_kwargs = self.create_runtime.call_args.kwargs
-        self.assertIs(create_runtime_kwargs["event_source"], rhapi.event_source)
+        self.assertIs(  # noqa: PT009
+            create_runtime_kwargs["event_source"],
+            rhapi.event_source,
+        )
 
 
 if __name__ == "__main__":
