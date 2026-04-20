@@ -98,11 +98,9 @@ jobs:
               )
           )
           manifest_version = str(manifest["version"])
-          manifest_zip_filename = str(manifest["zip_filename"])
           expected_version = os.environ["EXPECTED_VERSION"]
           expected_tag = os.environ["EXPECTED_TAG"]
           derived_tag = f"v{manifest_version}"
-          expected_zip_filename = f"racelink_rh_plugin_offline_{expected_tag}.zip"
 
           if manifest_version != expected_version:
               raise SystemExit(
@@ -113,11 +111,6 @@ jobs:
               raise SystemExit(
                   "Release tag mismatch: "
                   f"{derived_tag} != {expected_tag}"
-              )
-          if manifest_zip_filename != expected_zip_filename:
-              raise SystemExit(
-                  "Manifest zip filename mismatch: "
-                  f"{manifest_zip_filename} != {expected_zip_filename}"
               )
           PY
 

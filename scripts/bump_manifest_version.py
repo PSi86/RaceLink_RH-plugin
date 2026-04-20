@@ -12,11 +12,16 @@ VERSION_PATTERN = re.compile(
     r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
     r"(?P<suffix>[-+][0-9A-Za-z.-]+)?$"
 )
+DEFAULT_ZIP_FILENAME = "racelink_rh_plugin_offline.zip"
 
 
-def _offline_zip_filename(version: str) -> str:
+def _offline_zip_filename(version: str, *, versioned: bool) -> str:
+    if not versioned:
+        return DEFAULT_ZIP_FILENAME
+
     normalized = _normalize_version(version)
-    return f"racelink_rh_plugin_offline_v{normalized}.zip"
+    sanitized = normalized.replace(".", "_").replace("-", "_").replace("+", "_")
+    return f"racelink_rh_plugin_offline_v{sanitized}.zip"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -37,6 +42,14 @@ def _parse_args() -> argparse.Namespace:
         default="",
         help=(
             "Explicit plugin version. If omitted, increment the current patch version."
+        ),
+    )
+    parser.add_argument(
+        "--versioned-zip-filename",
+        action="store_true",
+        help=(
+            "Also rewrite manifest.zip_filename to a versioned offline ZIP name. "
+            "Disabled by default."
         ),
     )
     return parser.parse_args()
@@ -67,13 +80,21 @@ def _increment_version(current_version: str) -> str:
     return f"{major}.{minor}.{patch}{suffix}"
 
 
-def bump_manifest_version(*, manifest_path: Path, version: str) -> str:
+def bump_manifest_version(
+    *,
+    manifest_path: Path,
+    version: str,
+    versioned_zip_filename: bool,
+) -> str:
     """Write an explicit or auto-incremented version into the plugin manifest."""
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     current_version = _normalize_version(str(manifest["version"]))
     target_version = _normalize_version(version) or _increment_version(current_version)
     manifest["version"] = target_version
-    manifest["zip_filename"] = _offline_zip_filename(target_version)
+    manifest["zip_filename"] = _offline_zip_filename(
+        target_version,
+        versioned=versioned_zip_filename,
+    )
     manifest_path.write_text(
         json.dumps(manifest, indent=2) + "\n",
         encoding="utf-8",
@@ -87,6 +108,7 @@ def main() -> int:
     version = bump_manifest_version(
         manifest_path=args.manifest.resolve(),
         version=args.version,
+        versioned_zip_filename=args.versioned_zip_filename,
     )
     sys.stdout.write(f"{version}\n")
     return 0
