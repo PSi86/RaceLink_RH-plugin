@@ -25,3 +25,10 @@ dist-local-*
 .idea/
 .vscode/
 *.egg-info/
+
+# Local AI / agent memory — never committed.
+CLAUDE.md
+CLAUDE.local.md
+
+# Pytest cache
+.pytest_cache/
