@@ -454,7 +454,7 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
         group_options: list[UIFieldSelectOption] = []
         for index, group in enumerate(self._groups()):
             group_name = str(getattr(group, "name", ""))
-            if self._is_all_wled_group(group):
+            if self._is_all_devices_broadcast_group(group):
                 if capability_set and "WLED" not in capability_set:
                     continue
                 if selected_devices:
@@ -464,11 +464,29 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
                 group_options.append(UIFieldSelectOption(index, group_name))
         return group_options
 
-    def _is_all_wled_group(self, group: Any) -> bool:
-        """Return whether a group is the synthetic all-WLED group."""
-        return bool(group.static_group) and str(getattr(group, "name", "")) == (
-            "All WLED Nodes"
-        )
+    # ``All Devices (Broadcast)`` is the post-2026-05-01 label; ``All WLED
+    # Nodes`` is the legacy label that older user backups still carry. We
+    # recognise both so an imported legacy backup keeps offering the
+    # broadcast option in the dropdown until the operator re-saves it
+    # (re-save writes the canonical new name from
+    # ``rl_groups_backup``-template in dataio.py).
+    _ALL_DEVICES_BROADCAST_GROUP_NAMES = (
+        "All Devices (Broadcast)",
+        "All WLED Nodes",
+    )
+
+    def _is_all_devices_broadcast_group(self, group: Any) -> bool:
+        """Return whether a group is the synthetic all-devices broadcast group.
+
+        Identified by ``static_group != 0`` plus a name match against the
+        canonical and legacy labels. The synthetic group's value on the
+        wire is always ``255`` (groupId broadcast) regardless of its
+        position in the persisted group list.
+        """
+        if not bool(getattr(group, "static_group", 0)):
+            return False
+        name = str(getattr(group, "name", ""))
+        return name in self._ALL_DEVICES_BROADCAST_GROUP_NAMES
 
     def createUiGroupList(  # noqa: N802
         self,
@@ -480,7 +498,7 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
         for index, group in enumerate(self._groups()):
             if exclude_static and group.static_group != 0:
                 continue
-            value = 255 if self._is_all_wled_group(group) else index
+            value = 255 if self._is_all_devices_broadcast_group(group) else index
             group_options.append(UIFieldSelectOption(value, group.name))
         return group_options
 

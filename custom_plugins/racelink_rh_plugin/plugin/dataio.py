@@ -122,7 +122,14 @@ class RotorHazardDataIOMixin:
             ],
             "rl_groups_backup": [
                 {
-                    "name": "All WLED Nodes",
+                    # 2026-05-01 rename: this synthetic group used to be
+                    # called "All WLED Nodes". The new label matches the
+                    # unified target-picker vocabulary in the host's WebUI
+                    # and the public docs (operator-setup.md, broadcast-
+                    # ruleset.md). Existing user backups carrying the old
+                    # name still work — see ``_is_all_devices_broadcast_group``
+                    # in ui.py.
+                    "name": "All Devices (Broadcast)",
                     "static_group": 1,
                     "dev_type": 0,
                 }
