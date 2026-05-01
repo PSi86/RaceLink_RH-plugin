@@ -8,7 +8,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from RHUI import UIField, UIFieldSelectOption, UIFieldType
-from racelink.domain import RL_DeviceGroup, get_dev_type_info, get_specials_config
+from racelink.domain import (
+    RL_DeviceGroup,
+    get_dev_type_info,
+    get_specials_config,
+    state_scope,
+)
 from .actions import RotorHazardActionsMixin
 from .dataio import RotorHazardDataIOMixin
 from .source import RotorHazardSource
@@ -19,13 +24,43 @@ type DeviceOptionMap = dict[str, list[UIFieldSelectOption]]
 
 
 class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
-    """Bridge RaceLink configuration and quick actions into RotorHazard UI."""
+    """Bridge RaceLink configuration and quick actions into RotorHazard UI.
+
+    Static UI elements bootstrap once on startup:
+    ``rl_settings``, ``rl_quickset``, ``rl_device_config``,
+    ``rl_groups_config``, ``rl_assignToNewGroup``,
+    ``rl_btn_set_defaults``, ``rl_btn_force_groups``,
+    ``rl_btn_get_devices``, ``rl_run_autodetect``,
+    ``rl_quickset_brightness``, and ``run_quickset``.
+
+    Dynamic UI elements re-register only when their backing data changes:
+    ``rl_assignToGroup`` for ``GROUPS``, ``rl_quickset_group`` for
+    ``GROUPS``, ``rl_quickset_preset`` for ``PRESETS``, the default-group
+    ``ActionEffect`` for ``GROUPS`` or ``PRESETS``, and special
+    ``ActionEffect`` definitions for ``GROUPS``, ``DEVICES``,
+    ``DEVICE_MEMBERSHIP``, or ``PRESETS``.
+
+    DEVICE_SPECIALS alone does not affect any RH UI element -- it only writes
+    the specials dict to the device record. The WebUI re-renders from SSE.
+
+    Implementation: the "once" rows are guarded by the ``_*_bootstrapped``
+    flags so that even when ``sync_rotorhazard_ui`` (FULL scope) fires
+    repeatedly we don't call ``rhapi.fields.register_option`` again for them.
+    RotorHazard otherwise logs each redundant call as ``RHUI Redefining ...``
+    which is a hot path on every bulk operation.
+    """
 
     def __init__(self, controller: Any, rhapi: Any) -> None:
         """Store controller references and create the RH source adapter."""
         self.controller = controller
         self.rhapi = rhapi
         self.source = RotorHazardSource(controller, rhapi)
+        # Idempotency flags for the static parts of each panel. Each flips
+        # to ``True`` on first registration and is never reset while the
+        # plugin lives. Dynamic elements (group/preset lists) are re-
+        # registered every sync because their option sets change.
+        self._settings_panel_bootstrapped = False
+        self._quickset_panel_bootstrapped = False
 
     def _devices(self) -> list[Any]:
         """Return the current device repository contents."""
@@ -51,6 +86,153 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
         self.registerActions()
         if broadcast_panels:
             self.rhapi.ui.broadcast_ui("settings")
+            self.rhapi.ui.broadcast_ui("run")
+
+    def apply_scoped_update(
+        self,
+        scopes: Any = None,
+        *,
+        broadcast_panels: bool = False,
+    ) -> None:
+        """Re-register only the UI elements that depend on the mutated state.
+
+        ``scopes`` is a set of tokens from :mod:`racelink.domain.state_scope`.
+        When ``None``/falsy or containing ``FULL``, this delegates to the full
+        :meth:`sync_rotorhazard_ui`. ``{NONE}`` is a no-op (pure persistence,
+        no user-visible change).
+        """
+        resolved = (
+            state_scope.normalize_scopes(scopes) if scopes else {state_scope.FULL}
+        )
+
+        if state_scope.FULL in resolved:
+            self.sync_rotorhazard_ui(broadcast_panels=broadcast_panels)
+            return
+        if resolved == {state_scope.NONE}:
+            return
+
+        needs_groups, needs_devices, needs_presets, needs_scenes = (
+            self._resolve_refresh_flags(resolved)
+        )
+        if not any((needs_groups, needs_devices, needs_presets, needs_scenes)):
+            return
+
+        # BF7.1: only rebuild the cached uiDeviceList/uiGroupList when a
+        # device- or group-scope change actually occurred. Presets-only updates
+        # (RL preset CRUD) leave those lists unchanged, so regenerating them
+        # was pure overhead (~3 debug lines per preset edit). Scenes-only is
+        # the same situation (scene CRUD has no impact on group/device lists).
+        presets_only = needs_presets and not (
+            needs_groups or needs_devices or needs_scenes
+        )
+        scenes_only = needs_scenes and not (
+            needs_groups or needs_devices or needs_presets
+        )
+        if presets_only or scenes_only:
+            self._ensure_ui_state()
+        else:
+            self.refresh_ui_state()
+
+        touched_settings, touched_run = self._apply_targeted_refreshes(
+            needs_groups=needs_groups,
+            needs_devices=needs_devices,
+            needs_presets=needs_presets,
+            needs_scenes=needs_scenes,
+            presets_only=presets_only,
+        )
+        self._broadcast_targeted_refreshes(
+            broadcast_panels=broadcast_panels,
+            touched_settings=touched_settings,
+            touched_run=touched_run,
+        )
+
+    def _resolve_refresh_flags(
+        self,
+        resolved: set[str],
+    ) -> tuple[bool, bool, bool, bool]:
+        """Resolve which dynamic UI sections need rebuilding for one update."""
+        needs_groups = state_scope.GROUPS in resolved
+        needs_devices = bool(
+            resolved & {state_scope.DEVICES, state_scope.DEVICE_MEMBERSHIP}
+        )
+        needs_presets = state_scope.PRESETS in resolved
+        needs_scenes = state_scope.SCENES in resolved
+        return needs_groups, needs_devices, needs_presets, needs_scenes
+
+    def _apply_targeted_refreshes(
+        self,
+        *,
+        needs_groups: bool,
+        needs_devices: bool,
+        needs_presets: bool,
+        needs_scenes: bool = False,
+        presets_only: bool = False,
+    ) -> tuple[bool, bool]:
+        """Refresh only the dynamic UI elements that depend on changed state.
+
+        ``presets_only`` is forwarded to :meth:`_register_special_actions` so
+        it can skip capabilities whose UI bindings do not depend on the RL
+        preset list (BF7.3). For mixed scopes it stays ``False`` and every
+        capability is re-registered unchanged.
+        """
+        # DEVICE_SPECIALS alone has no consumer in the RH settings UI today
+        # -> intentional no-op.
+
+        touched_settings = False
+        touched_run = False
+        touched_default_action = False
+
+        if needs_groups:
+            self._register_assign_to_group_only()
+            self._register_quickset_group_only()
+            touched_default_action = True
+            touched_settings = True
+            touched_run = True
+
+        if needs_presets:
+            self._register_quickset_preset_only()
+            touched_default_action = True
+            touched_settings = True
+            touched_run = True
+
+        # ``_register_default_group_action`` embeds both the group list and
+        # the preset options, so it must run once when either changed -- but
+        # exactly once per update, not twice.
+        if touched_default_action:
+            self._register_default_group_action()
+
+        # SCENES scope only re-registers the ``RaceLink Scene`` ActionEffect
+        # (whose SELECT options track scenes_service.list()). Group/device/
+        # preset lists are untouched.
+        if needs_scenes:
+            self._register_scene_action()
+            touched_settings = True
+
+        # Special actions embed device/group lists and preset options per
+        # capability, so they must be refreshed whenever any of these lists
+        # change. Presets-only updates (RL preset CRUD) filter out capabilities
+        # that don't reference the preset list (see BF7.3). Scene CRUD does
+        # not affect special-action UI bindings, so we skip the special-actions
+        # rebuild on a pure SCENES update.
+        if needs_groups or needs_devices or needs_presets:
+            self._register_special_actions(presets_only=presets_only)
+            touched_settings = True
+
+        return touched_settings, touched_run
+
+    def _broadcast_targeted_refreshes(
+        self,
+        *,
+        broadcast_panels: bool,
+        touched_settings: bool,
+        touched_run: bool,
+    ) -> None:
+        """Broadcast RotorHazard panels affected by a targeted refresh."""
+        if not broadcast_panels:
+            return
+        if touched_settings:
+            self.rhapi.ui.broadcast_ui("settings")
+        if touched_run:
             self.rhapi.ui.broadcast_ui("run")
 
     def _ensure_ui_state(self) -> None:
@@ -83,13 +265,26 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
         return []
 
     def register_settings(self) -> None:
-        """Register the RaceLink settings panel and quick actions."""
-        logger.debug("RL: Registering settings UI elements")
-        self._ensure_ui_state()
-        temp_ui_group_list = [UIFieldSelectOption(0, "New Group")]
-        temp_ui_group_list += self.controller.uiDiscoveryGroupList
+        """Register the RaceLink settings panel, static fields and buttons.
 
-        self.rhapi.ui.register_panel("rl_settings", "RaceLink Plugin", "settings")
+        The panel and its static elements are bootstrapped on the first call
+        (and never again). The only dynamic element on this panel,
+        ``rl_assignToGroup``, is re-registered on every call because its
+        options track ``uiDiscoveryGroupList``.
+        """
+        logger.debug("RL: Refreshing settings UI (dynamic scope)")
+        self._ensure_ui_state()
+        if not self._settings_panel_bootstrapped:
+            logger.debug("RL: Bootstrapping settings panel (one-shot)")
+            self.rhapi.ui.register_panel("rl_settings", "RaceLink Plugin", "settings")
+            self._register_static_settings_fields()
+            self._register_static_settings_quickbuttons()
+            self._settings_panel_bootstrapped = True
+        # Dynamic: depends on the current group list.
+        self._register_assign_to_group_only()
+
+    def _register_static_settings_fields(self) -> None:
+        """Register settings fields that do not depend on runtime state."""
         self.rhapi.fields.register_option(
             UIField(
                 "rl_device_config",
@@ -110,6 +305,21 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
         )
         self.rhapi.fields.register_option(
             UIField(
+                "rl_assignToNewGroup",
+                "New Group Name",
+                UIFieldType.TEXT,
+                private=False,
+            ),
+            "rl_settings",
+        )
+
+    def _register_assign_to_group_only(self) -> None:
+        """Register only ``rl_assignToGroup`` (depends on uiDiscoveryGroupList)."""
+        self._ensure_ui_state()
+        temp_ui_group_list = [UIFieldSelectOption(0, "New Group")]
+        temp_ui_group_list += self.controller.uiDiscoveryGroupList
+        self.rhapi.fields.register_option(
+            UIField(
                 "rl_assignToGroup",
                 "Add discovered Devices to Group",
                 UIFieldType.SELECT,
@@ -118,20 +328,14 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
             ),
             "rl_settings",
         )
-        self.rhapi.fields.register_option(
-            UIField(
-                "rl_assignToNewGroup",
-                "New Group Name",
-                UIFieldType.TEXT,
-                private=False,
-            ),
-            "rl_settings",
-        )
+
+    def _register_static_settings_quickbuttons(self) -> None:
+        """Register the static quickbuttons of the settings panel."""
         self.rhapi.ui.register_quickbutton(
             "rl_settings",
             "rl_btn_set_defaults",
             "Save Configuration",
-            self.controller.save_to_db,
+            self._save_configuration_action,
             args={"manual": True},
         )
         self.rhapi.ui.register_quickbutton(
@@ -155,6 +359,17 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
             self.controller.discoverPort,
             args={"manual": True},
         )
+
+    def _save_configuration_action(self, args: Any = None) -> None:
+        """Quickbutton handler for "Save Configuration".
+
+        Binding ``self.controller.save_to_db`` directly would invoke it with a
+        missing ``scopes`` argument, which falls back to ``{FULL}`` and
+        therefore re-registers every static UI element. The Save button only
+        flushes state to disk -- nothing visible changes -- so we pass
+        ``scopes={NONE}`` to signal "no UI refresh needed".
+        """
+        self.controller.save_to_db(args or {"manual": True}, scopes={state_scope.NONE})
 
     def createUiDevList(self) -> list[UIFieldSelectOption]:  # noqa: N802
         """Build an unfiltered device selection list."""
@@ -270,14 +485,30 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
         return group_options
 
     def register_quickset_ui(self) -> None:
-        """Register the RaceLink quickset panel."""
+        """Register the quickset panel and its elements.
+
+        Panel + static elements (brightness, Apply button) are bootstrapped
+        once. The two option-list-backed fields are re-registered every call
+        because their options track ``uiGroupList`` / ``uiPresetList``.
+        """
         self._ensure_ui_state()
         if not getattr(self.controller, "uiGroupList", None):
             logger.debug("Skipping RaceLink quickset registration: no groups yet")
             return
-        effect_options = self._get_select_options("wled_control", "presetId")
-        default_effect = effect_options[0].value if effect_options else "01"
-        self.rhapi.ui.register_panel("rl_quickset", "RaceLink Quickset", "run")
+        if not self._quickset_panel_bootstrapped:
+            logger.debug("RL: Bootstrapping quickset panel (one-shot)")
+            self.rhapi.ui.register_panel("rl_quickset", "RaceLink Quickset", "run")
+            self._register_static_quickset_fields()
+            self._quickset_panel_bootstrapped = True
+        # Dynamic: depend on the current group / preset lists.
+        self._register_quickset_group_only()
+        self._register_quickset_preset_only()
+
+    def _register_quickset_group_only(self) -> None:
+        """Register only ``rl_quickset_group`` (depends on uiGroupList)."""
+        self._ensure_ui_state()
+        if not getattr(self.controller, "uiGroupList", None):
+            return
         self.rhapi.fields.register_option(
             UIField(
                 "rl_quickset_group",
@@ -288,16 +519,48 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
             ),
             "rl_quickset",
         )
+
+    def _register_quickset_preset_only(self) -> None:
+        """Register only ``rl_quickset_preset`` — backed exclusively by RL presets.
+
+        Phase C. WLED ``presets_*.json`` stays in the RaceLink WebUI; the
+        RotorHazard quickset shows only RL presets.
+        """
+        preset_options = self._rl_preset_options()
+        default_preset = preset_options[0].value if preset_options else "0"
         self.rhapi.fields.register_option(
             UIField(
-                "rl_quickset_effect",
-                "Color",
+                "rl_quickset_preset",
+                "RL Preset",
                 UIFieldType.SELECT,
-                options=effect_options,
-                value=default_effect,
+                options=preset_options,
+                value=default_preset,
             ),
             "rl_quickset",
         )
+
+    def _rl_preset_options(self) -> list[UIFieldSelectOption]:
+        """Build select-options from the RL preset store.
+
+        Falls back to a single disabled-ish placeholder when no presets exist
+        yet so RotorHazard still renders a valid SELECT field (it would reject
+        an empty options list otherwise).
+        """
+        rl_service = getattr(self.controller, "rl_presets_service", None)
+        if rl_service is None:
+            return [UIFieldSelectOption("0", "— no RL presets —")]
+        try:
+            presets = rl_service.list()
+        except Exception:
+            # swallow-ok: surface a placeholder and let RH continue rendering
+            logger.exception("RL: failed to load RL preset list")
+            return [UIFieldSelectOption("0", "— no RL presets —")]
+        if not presets:
+            return [UIFieldSelectOption("0", "— no RL presets —")]
+        return [UIFieldSelectOption(str(p["id"]), p["label"]) for p in presets]
+
+    def _register_static_quickset_fields(self) -> None:
+        """Register the brightness field and the Apply quickbutton (no data binding)."""
         self.rhapi.fields.register_option(
             UIField(
                 "rl_quickset_brightness",
@@ -318,15 +581,15 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
     def apply_presets_options(self, parsed: list[tuple[int, str]] | None) -> None:
         """Apply preset metadata loaded by the host package."""
         if not parsed:
-            self.controller.uiEffectList = [
+            self.controller.uiPresetList = [
                 UIFieldSelectOption("0", "No presets.json found")
             ]
         else:
-            self.controller.uiEffectList = [
+            self.controller.uiPresetList = [
                 UIFieldSelectOption(str(preset_id), name) for preset_id, name in parsed
             ]
         try:
-            self.sync_rotorhazard_ui(broadcast_panels=True)
+            self.apply_scoped_update({state_scope.PRESETS}, broadcast_panels=True)
         except Exception:
             logger.exception("Unable to refresh RaceLink quickset UI")
 
@@ -347,7 +610,13 @@ class RotorHazardUIAdapter(RotorHazardActionsMixin, RotorHazardDataIOMixin):
             return
 
         self.controller.group_repository.append(RL_DeviceGroup(new_group_name))
-        self.sync_rotorhazard_ui(broadcast_panels=True)
+        # Discovery affects the group list (we just added one) and, if nodes
+        # responded, the device membership too. Narrower than FULL so the
+        # static parts of the panels are not re-registered.
+        self.apply_scoped_update(
+            {state_scope.GROUPS, state_scope.DEVICE_MEMBERSHIP},
+            broadcast_panels=True,
+        )
 
     def _build_new_group_name(self, configured_name: str | None) -> str:
         """Build a timestamped group name for discovery-created groups."""
