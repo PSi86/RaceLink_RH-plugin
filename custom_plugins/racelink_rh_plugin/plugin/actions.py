@@ -540,6 +540,27 @@ class RotorHazardActionsMixin:
         except Exception:
             return value
 
+    def _resolve_preset_id(self, action: ActionPayload, *, where: str) -> int | None:
+        """Read ``rl_action_preset`` from a persisted RH action dict.
+
+        Returns ``None`` and logs a remediation hint when the key is missing.
+        Action bindings created before the ``rl_action_effect`` →
+        ``rl_action_preset`` rename (commit fc0f36f) carry the old key, and
+        RotorHazard stores the dict verbatim — the operator must re-bind the
+        event action in the RH UI for the new key to land in the DB.
+        """
+        preset_raw = action.get("rl_action_preset")
+        if preset_raw is None:
+            logger.warning(
+                "%s: stored action is missing 'rl_action_preset' — likely a "
+                "stale RH event-action bound before the rl_action_effect → "
+                "rl_action_preset rename. Re-bind the event action in the "
+                "RotorHazard UI.",
+                where,
+            )
+            return None
+        return int(preset_raw)
+
     def nodeSwitch(  # noqa: N802
         self,
         action: ActionPayload,
@@ -552,10 +573,13 @@ class RotorHazardActionsMixin:
         and sends ``OPC_CONTROL_ADV`` with the persisted parameter snapshot.
         """
         if "rl_action_device" in action:
+            preset_id = self._resolve_preset_id(action, where="nodeSwitch")
+            if preset_id is None:
+                return
             self._apply_device_action(
                 device_addr=str(action["rl_action_device"]),
-                brightness=int(action["rl_action_brightness"]),
-                preset_id=int(action["rl_action_preset"]),
+                brightness=int(action.get("rl_action_brightness", 70)),
+                preset_id=preset_id,
             )
 
         if "manual" in action:
@@ -612,11 +636,14 @@ class RotorHazardActionsMixin:
     ) -> None:
         """Apply a group action or quickset action."""
         if "rl_action_group" in action:
+            preset_id = self._resolve_preset_id(action, where="groupSwitch")
+            if preset_id is None:
+                return
             logger.debug("Action triggered")
             self._send_group_action(
                 group_id=int(action["rl_action_group"]),
-                brightness=int(action["rl_action_brightness"]),
-                preset_id=int(action["rl_action_preset"]),
+                brightness=int(action.get("rl_action_brightness", 70)),
+                preset_id=preset_id,
             )
 
         if "manual" in action:

@@ -274,7 +274,7 @@ def _build_scope_harness() -> _ScopeHarness:
     groups = [
         _FakeGroup("Pilots"),
         _FakeGroup("Spectators"),
-        _FakeGroup("All WLED Nodes", static_group=1),
+        _FakeGroup("All Devices (Broadcast)", static_group=1),
     ]
     controller = _FakeController(devices, groups)
     rhapi = _FakeRhApi()
